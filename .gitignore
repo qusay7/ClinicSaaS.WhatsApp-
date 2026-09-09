@@ -1,0 +1,8 @@
+node_modules/
+
+# WhatsApp session credentials — these ARE the live linked-device sessions.
+# Committing them would let anyone with repo access send/receive messages
+# as any connected clinic. Back them up separately if needed, never in git.
+auth_by_clinic/
+
+*.log
