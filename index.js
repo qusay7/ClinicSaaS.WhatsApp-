@@ -26,7 +26,7 @@ async function startSession(rawClinicId) {
   let session = sessions.get(clinicId)
   if (session && (session.status === 'open' || session.status === 'connecting')) return session
 
-  session = { sock: null, status: 'connecting', qrDataUrl: null }
+  session = { sock: null, status: 'connecting', qrDataUrl: null, phoneNumber: null }
   sessions.set(clinicId, session)
 
   const { state, saveCreds } = await useMultiFileAuthState(`./auth_by_clinic/${clinicId}`)
@@ -49,7 +49,9 @@ async function startSession(rawClinicId) {
     if (connection === 'open') {
       session.status = 'open'
       session.qrDataUrl = null
-      console.log(`[${clinicId}] ✅ متصل بواتساب`)
+      // ✅ رقم الواتساب المتصل — sock.user.id بصيغة "9627xxxxxxx:xx@s.whatsapp.net"
+      session.phoneNumber = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : null
+      console.log(`[${clinicId}] ✅ متصل بواتساب (${session.phoneNumber || '?'})`)
     }
 
     if (connection === 'close') {
@@ -58,6 +60,7 @@ async function startSession(rawClinicId) {
       console.log(`[${clinicId}] الاتصال انقطع (statusCode=${statusCode}):`, lastDisconnect?.error?.message || '')
       if (loggedOut) {
         session.status = 'logged_out'
+        session.phoneNumber = null
         fs.rmSync(`./auth_by_clinic/${clinicId}`, { recursive: true, force: true })
       } else {
         session.status = 'reconnecting'
@@ -80,14 +83,14 @@ app.post('/clinics/:clinicId/start', async (req, res) => {
 
 app.get('/clinics/:clinicId/status', (req, res) => {
   const session = sessions.get(req.params.clinicId.toLowerCase())
-  res.json({ status: session?.status || 'not_started' })
+  res.json({ status: session?.status || 'not_started', phoneNumber: session?.phoneNumber || null })
 })
 
 // ✅ نفس الحالة + QR (كـ data URL) بضربة واحدة — عشان الباك اند .NET يستهلكها
 // بسهولة (JSON بس، بدون التعامل مع صورة ثنائية) ويعيد تمريرها للفرونت اند
 app.get('/clinics/:clinicId/qr-data', (req, res) => {
   const session = sessions.get(req.params.clinicId.toLowerCase())
-  res.json({ status: session?.status || 'not_started', qrDataUrl: session?.qrDataUrl || null })
+  res.json({ status: session?.status || 'not_started', qrDataUrl: session?.qrDataUrl || null, phoneNumber: session?.phoneNumber || null })
 })
 
 // ✅ يعرض QR كصورة مباشرة بالمتصفح — GET /clinics/clinic-1/qr
