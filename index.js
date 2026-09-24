@@ -26,7 +26,8 @@ async function startSession(rawClinicId) {
   let session = sessions.get(clinicId)
   if (session && (session.status === 'open' || session.status === 'connecting')) return session
 
-  session = { sock: null, status: 'connecting', qrDataUrl: null, phoneNumber: null }
+  const reconnectAttempts = session?.reconnectAttempts || 0
+  session = { sock: null, status: 'connecting', qrDataUrl: null, phoneNumber: null, reconnectAttempts }
   sessions.set(clinicId, session)
 
   const { state, saveCreds } = await useMultiFileAuthState(`./auth_by_clinic/${clinicId}`)
@@ -49,6 +50,7 @@ async function startSession(rawClinicId) {
     if (connection === 'open') {
       session.status = 'open'
       session.qrDataUrl = null
+      session.reconnectAttempts = 0
       // ✅ رقم الواتساب المتصل — sock.user.id بصيغة "9627xxxxxxx:xx@s.whatsapp.net"
       session.phoneNumber = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : null
       console.log(`[${clinicId}] ✅ متصل بواتساب (${session.phoneNumber || '?'})`)
@@ -58,13 +60,27 @@ async function startSession(rawClinicId) {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
       const loggedOut = statusCode === DisconnectReason.loggedOut
       console.log(`[${clinicId}] الاتصال انقطع (statusCode=${statusCode}):`, lastDisconnect?.error?.message || '')
+
+      // ✅ تنظيف الـ socket القديم قبل أي إعادة محاولة — بدون هذا كان كل اتصال
+      // فاشل يبقى معلّقاً بذاكرته ومستمعيه بدل أن يُجمَع كنفاية (GC)، وهذا
+      // (مع غياب أي تأخير أدناه) هو ما تسبّب فعلياً بانهيار "out of memory"
+      sock.ev.removeAllListeners()
+      try { sock.end(undefined) } catch { /* الاتصال مقطوع أصلاً — تجاهل */ }
+
       if (loggedOut) {
         session.status = 'logged_out'
         session.phoneNumber = null
+        session.reconnectAttempts = 0
         fs.rmSync(`./auth_by_clinic/${clinicId}`, { recursive: true, force: true })
       } else {
         session.status = 'reconnecting'
-        startSession(clinicId)
+        session.reconnectAttempts = (session.reconnectAttempts || 0) + 1
+        // ✅ تأخير متزايد (5ث، 10ث، ...) بسقف 60 ثانية بدل إعادة المحاولة
+        // فوراً بلا توقف — هذا التأخير المفقود سابقاً كان يسمح بحلقة لا نهائية
+        // من المحاولات الفورية عند انقطاع الشبكة/DNS، وهي التي استهلكت الذاكرة
+        const delayMs = Math.min(5000 * session.reconnectAttempts, 60000)
+        console.log(`[${clinicId}] إعادة المحاولة بعد ${delayMs / 1000} ثانية... (محاولة #${session.reconnectAttempts})`)
+        setTimeout(() => startSession(clinicId), delayMs)
       }
     }
   })
