@@ -33,7 +33,9 @@ async function startSession(rawClinicId) {
   const { state, saveCreds } = await useMultiFileAuthState(`./auth_by_clinic/${clinicId}`)
   const version = await getVersion()
 
-  const sock = makeWASocket({ auth: state, logger, version })
+  // ✅ markOnlineOnConnect: false — تجنّب إظهار الحساب "متصل" دائماً بشكل
+  // مستمر، وهو سلوك غير طبيعي لحساب شخصي عادي وقد يُحسب كإشارة بوت
+  const sock = makeWASocket({ auth: state, logger, version, markOnlineOnConnect: false })
   session.sock = sock
 
   sock.ev.on('creds.update', saveCreds)
@@ -134,6 +136,14 @@ app.post('/clinics/:clinicId/send', async (req, res) => {
   const jid = `${digits}@s.whatsapp.net`
 
   try {
+    // ✅ محاكاة سلوك إنسان قبل الإرسال — "يكتب..." لفترة عشوائية ثم يرسل.
+    // رسائل تصدر فوراً وبلا توقف عن حساب واحد لعشرات الأرقام هي نمط البوت
+    // الكلاسيكي الذي يرفع خطر الحظر؛ هذا التأخير جزء من تقليل ذلك النمط
+    await session.sock.presenceSubscribe(jid).catch(() => {})
+    await session.sock.sendPresenceUpdate('composing', jid).catch(() => {})
+    await new Promise((resolve) => setTimeout(resolve, 1200 + Math.random() * 2800))
+    await session.sock.sendPresenceUpdate('paused', jid).catch(() => {})
+
     await session.sock.sendMessage(jid, { text: message })
     res.json({ ok: true })
   } catch (err) {
